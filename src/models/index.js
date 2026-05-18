@@ -6,6 +6,7 @@ const MenuItem  = require('./MenuItem');
 const Order     = require('./Order');
 const OrderItem = require('./OrderItem');
 const Payment   = require('./Payment');
+const Review    = require('./Review');
 
 // ─── Associations ─────────────────────────────────────────────────────────────
 
@@ -41,6 +42,13 @@ OrderItem.belongsTo(MenuItem, { foreignKey: 'menu_item_id', as: 'menuItem' });
 Order.hasOne(Payment, { foreignKey: 'order_id', as: 'payment' });
 Payment.belongsTo(Order, { foreignKey: 'order_id', as: 'order' });
 
+// An Order has ONE review (written by the consumer after delivery)
+Order.hasOne(Review, { foreignKey: 'order_id', as: 'review' });
+Review.belongsTo(Order,  { foreignKey: 'order_id',   as: 'order' });
+Review.belongsTo(User,   { foreignKey: 'consumer_id', as: 'consumer' });
+Review.belongsTo(Vendor, { foreignKey: 'vendor_id',   as: 'vendor' });
+Review.belongsTo(User,   { foreignKey: 'rider_id',    as: 'rider' });
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -51,4 +59,5 @@ module.exports = {
   Order,
   OrderItem,
   Payment,
+  Review,
 };

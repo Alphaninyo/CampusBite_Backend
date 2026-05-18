@@ -9,6 +9,7 @@ router.post('/register', authController.register);
 router.post('/login',    authController.login);
 
 // ── Protected routes (valid JWT required) ────────────────────────────────────
-router.get('/me', protect, authController.getMe);
+router.get('/me',           protect, authController.getMe);
+router.put('/device-token', protect, authController.updateDeviceToken);
 
 module.exports = router;

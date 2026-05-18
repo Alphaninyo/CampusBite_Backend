@@ -30,6 +30,8 @@ app.use('/api/vendors',  require('./routes/vendor.routes'));
 app.use('/api/menu',     require('./routes/menu.routes'));
 app.use('/api/orders',   require('./routes/order.routes'));
 app.use('/api/payments', require('./routes/payment.routes'));
+app.use('/api/reviews',  require('./routes/review.routes'));
+app.use('/api/admin',    require('./routes/admin.routes'));
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 

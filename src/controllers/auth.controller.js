@@ -222,3 +222,24 @@ exports.getMe = async (req, res) => {
     user: req.user,
   });
 };
+
+/**
+ * PUT /api/auth/device-token
+ * Protected — stores the caller's Firebase FCM token.
+ * The mobile app calls this once after login so the backend can send push notifications.
+ *
+ * Body: { fcm_token: string }
+ */
+exports.updateDeviceToken = async (req, res) => {
+  try {
+    const { fcm_token } = req.body;
+    if (!fcm_token) {
+      return res.status(400).json({ success: false, message: 'fcm_token is required.' });
+    }
+    await User.update({ fcm_token }, { where: { id: req.user.id } });
+    res.status(200).json({ success: true, message: 'Device token registered.' });
+  } catch (error) {
+    console.error('[AUTH] updateDeviceToken error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};

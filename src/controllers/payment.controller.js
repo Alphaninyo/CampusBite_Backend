@@ -1,5 +1,6 @@
-const { sequelize, Payment, Order } = require('../models');
-const { createOrderFromPayment }    = require('./order.controller');
+const { sequelize, Payment, Order, User, Vendor } = require('../models');
+const { createOrderFromPayment }                  = require('./order.controller');
+const notify                                      = require('../services/notification.service');
 
 // ─── Safaricom STK Push Callback ──────────────────────────────────────────────
 
@@ -65,6 +66,18 @@ exports.handleCallback = async (req, res) => {
 
     await t.commit();
     console.log(`[MPESA] Payment confirmed. Order ${order.id} created. Receipt: ${mpesa_ref}`);
+
+    // Fire-and-forget notifications — failures must never affect the response to Safaricom
+    const { consumer_id, vendor_id, total_amount } = cartData;
+    Promise.all([
+      User.findByPk(consumer_id, { attributes: ['fcm_token'] }),
+      Vendor.findByPk(vendor_id, { include: [{ model: User, as: 'owner', attributes: ['name', 'fcm_token'] }] }),
+      User.findByPk(consumer_id, { attributes: ['name'] }),
+    ]).then(([consumer, vendor, consumerUser]) => {
+      notify.send(consumer?.fcm_token, 'Order Confirmed!', `Payment of KES ${total_amount} received. Your order is being prepared.`, { order_id: order.id });
+      notify.send(vendor?.owner?.fcm_token, 'New Order!', `${consumerUser?.name ?? 'A customer'} placed a new order.`, { order_id: order.id });
+    }).catch(console.error);
+
     return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } catch (error) {
     await t.rollback();

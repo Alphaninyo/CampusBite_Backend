@@ -54,6 +54,11 @@ const User = sequelize.define(
       defaultValue: false,
       comment: 'Relevant for vendor and rider roles. Consumers are auto-approved.',
     },
+    fcm_token: {
+      type:      DataTypes.STRING(512),
+      allowNull: true,
+      comment:   'Firebase Cloud Messaging device token. Updated by the app on each login.',
+    },
   },
   {
     tableName: 'users',

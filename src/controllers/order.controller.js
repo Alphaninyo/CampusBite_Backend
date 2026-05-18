@@ -1,4 +1,5 @@
 const mpesaService = require('../services/mpesa.service');
+const notify       = require('../services/notification.service');
 const { sequelize, Order, OrderItem, MenuItem, Vendor, User, Payment } = require('../models');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -451,6 +452,28 @@ exports.updateOrderStatus = async (req, res) => {
     await order.update({ status: transition.next }, { transaction: t });
     await t.commit();
 
+    // Fire-and-forget push notifications per transition
+    const CONSUMER_MESSAGES = {
+      'Preparing':  ['Being Prepared',  'Your order is being prepared.'],
+      'Ready':      ['Order Ready',     'Your order is ready and waiting for a rider.'],
+      'Collected':  ['Rider Collected', 'A rider has collected your order!'],
+      'In Transit': ['On the Way!',     'Your order is on its way to you.'],
+      'Delivered':  ['Delivered!',      'Your order has arrived. Enjoy your meal!'],
+    };
+    const msg = CONSUMER_MESSAGES[transition.next];
+    if (msg) {
+      User.findByPk(order.consumer_id, { attributes: ['fcm_token'] })
+        .then((u) => notify.send(u?.fcm_token, msg[0], msg[1], { order_id: order.id }))
+        .catch(console.error);
+    }
+    // Notify vendor when rider collects
+    if (transition.next === 'Collected') {
+      User.findByPk(req.user.id, { attributes: ['name'] }).then((rider) =>
+        Vendor.findByPk(order.vendor_id, { include: [{ model: User, as: 'owner', attributes: ['fcm_token'] }] })
+          .then((v) => notify.send(v?.owner?.fcm_token, 'Order Collected', `${rider?.name ?? 'Rider'} has collected the order.`, { order_id: order.id }))
+      ).catch(console.error);
+    }
+
     res.status(200).json({
       success:       true,
       message:       `Order advanced: "${previousStatus}" → "${transition.next}"`,
@@ -520,6 +543,12 @@ exports.assignRider = async (req, res) => {
 
     await order.update({ rider_id: req.user.id }, { transaction: t });
     await t.commit();
+
+    // Notify the vendor that a rider is coming
+    User.findByPk(req.user.id, { attributes: ['name'] }).then((rider) =>
+      Vendor.findByPk(order.vendor_id, { include: [{ model: User, as: 'owner', attributes: ['fcm_token'] }] })
+        .then((v) => notify.send(v?.owner?.fcm_token, 'Rider Assigned', `${rider?.name ?? 'A rider'} is on the way to collect the order.`, { order_id: order.id }))
+    ).catch(console.error);
 
     res.status(200).json({
       success:  true,
