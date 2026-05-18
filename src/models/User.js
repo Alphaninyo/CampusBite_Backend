@@ -59,6 +59,16 @@ const User = sequelize.define(
       allowNull: true,
       comment:   'Firebase Cloud Messaging device token. Updated by the app on each login.',
     },
+    password_reset_otp: {
+      type:      DataTypes.STRING(255),
+      allowNull: true,
+      comment:   'SHA-256 hash of the 6-digit OTP sent to the user\'s email.',
+    },
+    password_reset_expires: {
+      type:      DataTypes.DATE,
+      allowNull: true,
+      comment:   'Expiry timestamp for the password reset OTP (10 minutes from issue).',
+    },
   },
   {
     tableName: 'users',

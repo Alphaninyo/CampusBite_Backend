@@ -126,12 +126,58 @@ exports.getPaymentStatus = async (req, res) => {
 
     res.status(200).json({
       success:   true,
-      status:    payment.status,    // pending | confirmed | failed
-      order_id:  payment.order_id, // non-null only when confirmed
+      status:    payment.status,
+      order_id:  payment.order_id,
       mpesa_ref: payment.mpesa_ref,
     });
   } catch (error) {
     console.error('[PAYMENT] getPaymentStatus error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+// ─── Consumer: Cancel Pending Payment ────────────────────────────────────────
+
+/**
+ * POST /api/payments/:checkoutRequestId/cancel
+ * Protected — consumer only.
+ *
+ * Marks a pending payment as failed so no order will be created even if
+ * Safaricom's callback arrives late. The consumer should also decline the
+ * STK Push prompt on their phone to avoid an unmatched M-Pesa deduction.
+ *
+ * Only pending payments can be cancelled — confirmed/failed ones are immutable.
+ */
+exports.cancelPayment = async (req, res) => {
+  try {
+    const payment = await Payment.findOne({
+      where: { checkout_request_id: req.params.checkoutRequestId },
+    });
+
+    if (!payment) {
+      return res.status(404).json({ success: false, message: 'Checkout session not found.' });
+    }
+
+    // Verify ownership via cart_data
+    if (!payment.cart_data || payment.cart_data.consumer_id !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Access denied.' });
+    }
+
+    if (payment.status !== 'pending') {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot cancel — payment is already ${payment.status}.`,
+      });
+    }
+
+    await payment.update({ status: 'failed', cart_data: null });
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment cancelled. Please also decline the M-Pesa prompt on your phone if it appears.',
+    });
+  } catch (error) {
+    console.error('[PAYMENT] cancelPayment error:', error);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };

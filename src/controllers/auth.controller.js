@@ -1,6 +1,9 @@
+const crypto  = require('crypto');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
+const { Op }  = require('sequelize');
 const { User, Vendor, sequelize } = require('../models');
+const emailService = require('../services/email.service');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -221,6 +224,147 @@ exports.getMe = async (req, res) => {
     success: true,
     user: req.user,
   });
+};
+
+/**
+ * PUT /api/auth/profile
+ * Protected — any authenticated user.
+ * Updates name and/or phone. Email changes are not allowed (used as login identity).
+ *
+ * Body: { name?, phone? }
+ */
+exports.updateProfile = async (req, res) => {
+  try {
+    const { name, phone } = req.body;
+    if (!name && !phone) {
+      return res.status(400).json({ success: false, message: 'Provide at least one field to update: name or phone.' });
+    }
+
+    const updates = {};
+    if (name)  updates.name  = name.trim();
+    if (phone) updates.phone = phone.trim();
+
+    await User.update(updates, { where: { id: req.user.id } });
+    const updated = await User.findByPk(req.user.id, { attributes: { exclude: ['password_hash', 'fcm_token', 'password_reset_otp', 'password_reset_expires'] } });
+
+    res.status(200).json({ success: true, message: 'Profile updated.', user: updated });
+  } catch (error) {
+    console.error('[AUTH] updateProfile error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+/**
+ * PUT /api/auth/password
+ * Protected — any authenticated user.
+ * Changes the password after verifying the current one.
+ *
+ * Body: { current_password, new_password }
+ */
+exports.updatePassword = async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password) {
+      return res.status(400).json({ success: false, message: 'current_password and new_password are required.' });
+    }
+    if (new_password.length < 6) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters.' });
+    }
+
+    const user = await User.findByPk(req.user.id);
+    const isMatch = await bcrypt.compare(current_password, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect.' });
+    }
+
+    const password_hash = await bcrypt.hash(new_password, 12);
+    await user.update({ password_hash });
+
+    res.status(200).json({ success: true, message: 'Password updated successfully.' });
+  } catch (error) {
+    console.error('[AUTH] updatePassword error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+/**
+ * POST /api/auth/forgot-password
+ * Public — initiates a password reset by sending a 6-digit OTP to the user's email.
+ * The OTP is hashed before storage and expires in 10 minutes.
+ *
+ * Body: { email }
+ */
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const user = await User.findOne({ where: { email: email.toLowerCase() } });
+
+    // Always return 200 — prevents email enumeration attacks
+    if (!user) {
+      return res.status(200).json({ success: true, message: 'If that email is registered, a reset code has been sent.' });
+    }
+
+    const otp    = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digits
+    const hashed = crypto.createHash('sha256').update(otp).digest('hex');
+    const expiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    await user.update({ password_reset_otp: hashed, password_reset_expires: expiry });
+
+    await emailService.sendPasswordReset(user.email, user.name, otp);
+
+    res.status(200).json({ success: true, message: 'If that email is registered, a reset code has been sent.' });
+  } catch (error) {
+    console.error('[AUTH] forgotPassword error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+/**
+ * POST /api/auth/reset-password
+ * Public — verifies the OTP and sets a new password.
+ *
+ * Body: { email, otp, new_password }
+ */
+exports.resetPassword = async (req, res) => {
+  try {
+    const { email, otp, new_password } = req.body;
+    if (!email || !otp || !new_password) {
+      return res.status(400).json({ success: false, message: 'email, otp, and new_password are required.' });
+    }
+    if (new_password.length < 6) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters.' });
+    }
+
+    const hashed = crypto.createHash('sha256').update(otp).digest('hex');
+
+    const user = await User.findOne({
+      where: {
+        email:                email.toLowerCase(),
+        password_reset_otp:     hashed,
+        password_reset_expires: { [Op.gt]: new Date() },
+      },
+    });
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired reset code.' });
+    }
+
+    const password_hash = await bcrypt.hash(new_password, 12);
+    await user.update({
+      password_hash,
+      password_reset_otp:     null,
+      password_reset_expires: null,
+    });
+
+    res.status(200).json({ success: true, message: 'Password reset successfully. You can now log in.' });
+  } catch (error) {
+    console.error('[AUTH] resetPassword error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
 };
 
 /**
