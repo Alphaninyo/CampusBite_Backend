@@ -1,4 +1,4 @@
-const { sequelize, User, Vendor, Order, Payment, Review } = require('../models');
+const { sequelize, User, Vendor, Order, Payment, Review, MenuItem } = require('../models');
 const { Op } = require('sequelize');
 
 // ─── Stats Overview ───────────────────────────────────────────────────────────
@@ -137,6 +137,46 @@ exports.getAllUsers = async (req, res) => {
     });
   } catch (error) {
     console.error('[ADMIN] getAllUsers error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+// ─── All Vendors ──────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/admin/vendors
+ * Admin only — all vendor profiles with owner info and approval status.
+ * Query params: ?approved=true|false&page=1&limit=25
+ */
+exports.getAllVendors = async (req, res) => {
+  try {
+    const page   = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit  = Math.min(100, parseInt(req.query.limit) || 25);
+    const offset = (page - 1) * limit;
+
+    const where = {};
+    if (req.query.approved === 'true')  where.approved_at = { [Op.ne]: null };
+    if (req.query.approved === 'false') where.approved_at = null;
+
+    const { count, rows: vendors } = await Vendor.findAndCountAll({
+      where,
+      include: [
+        { model: User, as: 'owner', attributes: ['name', 'email', 'phone', 'is_approved'] },
+      ],
+      order:  [['created_at', 'DESC']],
+      limit,
+      offset,
+    });
+
+    res.status(200).json({
+      success: true,
+      total:   count,
+      page,
+      pages:   Math.ceil(count / limit),
+      vendors,
+    });
+  } catch (error) {
+    console.error('[ADMIN] getAllVendors error:', error);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };
