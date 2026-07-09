@@ -9,6 +9,7 @@ router.use(protect, restrictTo('admin'));
 
 router.get('/stats',   adminController.getStats);
 router.get('/orders',  adminController.getAllOrders);
+router.patch('/orders/:id/resolve-issue', adminController.resolveOrderIssue);
 router.get('/users',   adminController.getAllUsers);
 router.get('/vendors', adminController.getAllVendors);
 

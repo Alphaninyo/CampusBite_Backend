@@ -10,6 +10,7 @@ const router = express.Router();
 router.post('/initiate',                       protect, restrictTo('consumer'),        orderController.initiateCheckout);
 router.post('/dev-confirm/:checkoutRequestId', protect, restrictTo('consumer'),        orderController.devConfirmPayment);
 router.get( '/',                               protect, restrictTo('consumer'),        orderController.getMyOrders);
+router.patch('/:id/report-issue',              protect, restrictTo('consumer'),        orderController.reportIssue);
 
 // ── Vendor ────────────────────────────────────────────────────────────────────
 router.get( '/vendor',                         protect, restrictTo('vendor'),          orderController.getVendorOrders);

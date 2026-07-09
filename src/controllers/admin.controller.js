@@ -104,6 +104,31 @@ exports.getAllOrders = async (req, res) => {
   }
 };
 
+/**
+ * PATCH /api/admin/orders/:id/resolve-issue
+ * Admin only — marks a consumer-reported delivery issue as resolved.
+ */
+exports.resolveOrderIssue = async (req, res) => {
+  try {
+    const order = await Order.findByPk(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    if (!order.has_issue) {
+      return res.status(400).json({ success: false, message: 'This order has no reported issue.' });
+    }
+    if (order.issue_resolved_at) {
+      return res.status(400).json({ success: false, message: 'This issue has already been resolved.' });
+    }
+
+    await order.update({ issue_resolved_at: new Date() });
+    res.status(200).json({ success: true, message: 'Issue marked as resolved.', order });
+  } catch (error) {
+    console.error('[ADMIN] resolveOrderIssue error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
 // ─── All Users ────────────────────────────────────────────────────────────────
 
 /**

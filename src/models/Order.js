@@ -62,6 +62,30 @@ const Order = sequelize.define(
       type: DataTypes.STRING(255),
       allowNull: false,
     },
+    has_issue: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: 'True once the consumer reports a delivery problem via "Report a problem".',
+    },
+    issue_reason: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      comment: 'One of: not_delivered, wrong_items, missing_items, poor_quality, other.',
+    },
+    issue_note: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    issue_reported_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    issue_resolved_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'NULL = still open. Set by an admin resolving the report.',
+    },
   },
   {
     tableName: 'orders',
