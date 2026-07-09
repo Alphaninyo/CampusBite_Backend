@@ -1,5 +1,6 @@
-const mpesaService = require('../services/mpesa.service');
-const notify       = require('../services/notification.service');
+const mpesaService  = require('../services/mpesa.service');
+const stripeService = require('../services/stripe.service');
+const notify        = require('../services/notification.service');
 const { sequelize, Order, OrderItem, MenuItem, Vendor, User, Payment } = require('../models');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -89,17 +90,23 @@ exports.createOrderFromPayment = async (payment, t) => {
  *   - Creates a pending Payment record (stores cart as JSONB for later retrieval)
  *   - Returns the checkout summary and a checkout_request_id
  *
- * Phase 5 will insert the real STK Push call between validation and Payment creation.
+ * Orders are only created once payment is confirmed — except cash, which
+ * creates the order immediately (no external payment step to wait for).
  *
  * Body: {
  *   vendor_id:        UUID,
  *   items:            [{ menu_item_id: UUID, quantity: number }],
- *   delivery_address: string
+ *   delivery_address: string,
+ *   payment_method:   'mpesa' | 'card' | 'cash'  (default: 'mpesa')
  * }
  */
 exports.initiateCheckout = async (req, res) => {
   try {
-    const { vendor_id, items, delivery_address } = req.body;
+    const { vendor_id, items, delivery_address, payment_method = 'mpesa' } = req.body;
+
+    if (!['mpesa', 'card', 'cash'].includes(payment_method)) {
+      return res.status(400).json({ success: false, message: 'payment_method must be one of: mpesa, card, cash.' });
+    }
 
     // ── Basic input validation ─────────────────────────────────────────────
     if (!vendor_id || !Array.isArray(items) || items.length === 0) {
@@ -159,7 +166,121 @@ exports.initiateCheckout = async (req, res) => {
     const delivery_fee = DELIVERY_FEE;
     const total_amount = parseFloat((food_subtotal + delivery_fee).toFixed(2));
 
-    // ── Initiate STK Push ──────────────────────────────────────────────────
+    const cartSnapshot = {
+      consumer_id:      req.user.id,
+      vendor_id,
+      items:            cartItems,
+      delivery_address: delivery_address.trim(),
+      food_subtotal,
+      delivery_fee,
+      total_amount,
+    };
+
+    // ─── Card flow (Stripe) ───────────────────────────────────────────────────
+    if (payment_method === 'card') {
+      // Fires a real Stripe PaymentIntent whenever a real secret key is present.
+      // Leave STRIPE_SECRET_KEY as the placeholder to run in dev/simulation mode.
+      const useLiveStripe = stripeService.isConfigured();
+
+      let checkoutRequestId;
+      let clientSecret   = null;
+      let publishableKey = null;
+      let devMode        = false;
+
+      if (useLiveStripe) {
+        let intent;
+        try {
+          intent = await stripeService.createPaymentIntent({
+            amount:      total_amount,
+            description: `CampusBite order — ${vendor.business_name}`,
+          });
+        } catch (stripeError) {
+          console.error('[ORDER] Stripe PaymentIntent failed:', stripeError.message);
+          return res.status(503).json({ success: false, message: 'Card payment service is currently unavailable. Please try again shortly.' });
+        }
+        checkoutRequestId = intent.id;
+        clientSecret       = intent.client_secret;
+        publishableKey     = process.env.STRIPE_PUBLISHABLE_KEY;
+      } else {
+        checkoutRequestId = `DEV-CARD-${Date.now()}-${req.user.id.slice(0, 8)}`;
+        devMode = true;
+      }
+
+      const payment = await Payment.create({
+        checkout_request_id: checkoutRequestId,
+        amount:              total_amount,
+        status:              'pending',
+        cart_data:           cartSnapshot,
+      });
+
+      return res.status(200).json({
+        success:             true,
+        message:             devMode
+          ? 'Dev mode: tap "Simulate Card Payment" in the app to confirm.'
+          : 'Enter your card details to confirm payment.',
+        checkout_request_id: payment.checkout_request_id,
+        payment_id:          payment.id,
+        client_secret:       clientSecret,
+        publishable_key:     publishableKey,
+        immediate:           false,
+        dev_mode:            devMode,
+        summary: {
+          vendor:           vendor.business_name,
+          items:            cartItems,
+          food_subtotal,
+          delivery_fee,
+          total_amount,
+          delivery_address: delivery_address.trim(),
+        },
+      });
+    }
+
+    // ─── Cash flow: create order immediately ─────────────────────────────────
+    // No external payment step to wait for. Payment is recorded 'pending' since
+    // this repo doesn't yet have a cash-collection confirmation endpoint — the
+    // order itself is what matters to the vendor/rider pipeline.
+    if (payment_method === 'cash') {
+      const t = await sequelize.transaction();
+      try {
+        const order = await exports.createOrderFromPayment({ cart_data: cartSnapshot }, t);
+
+        const checkout_request_id = `CASH-${Date.now()}-${req.user.id.slice(0, 8)}`;
+        await Payment.create(
+          {
+            checkout_request_id,
+            amount:       total_amount,
+            status:       'pending',
+            order_id:     order.id,
+            confirmed_at: null,
+            cart_data:    null,
+          },
+          { transaction: t }
+        );
+
+        await t.commit();
+
+        return res.status(201).json({
+          success:             true,
+          immediate:           true,
+          message:             'Order placed! Pay the rider in cash on delivery.',
+          checkout_request_id,
+          order_id:            order.id,
+          summary: {
+            vendor:           vendor.business_name,
+            items:            cartItems,
+            food_subtotal,
+            delivery_fee,
+            total_amount,
+            delivery_address: delivery_address.trim(),
+          },
+        });
+      } catch (error) {
+        await t.rollback();
+        throw error;
+      }
+    }
+
+    // ── M-Pesa flow ─────────────────────────────────────────────────────────
     // Cart validation is complete. Call Safaricom — outside any DB transaction
     // because network calls must not hold locks.
     let stkResponse;
@@ -186,15 +307,7 @@ exports.initiateCheckout = async (req, res) => {
       checkout_request_id: stkResponse.CheckoutRequestID,
       amount:              total_amount,
       status:              'pending',
-      cart_data: {
-        consumer_id:      req.user.id,
-        vendor_id,
-        items:            cartItems,
-        delivery_address: delivery_address.trim(),
-        food_subtotal,
-        delivery_fee,
-        total_amount,
-      },
+      cart_data:           cartSnapshot,
     });
 
     res.status(200).json({
@@ -278,6 +391,72 @@ exports.devConfirmPayment = async (req, res) => {
   } catch (error) {
     await t.rollback();
     console.error('[ORDER] devConfirmPayment error:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+// ─── Card Payments (Stripe) ───────────────────────────────────────────────────
+
+/**
+ * POST /api/orders/confirm-card-payment/:paymentId
+ * Protected — consumer only.
+ *
+ * Called by the Stripe checkout page after the card is confirmed client-side.
+ * Never trusts that report alone — re-verifies the PaymentIntent status
+ * directly with Stripe before creating the order, exactly like the M-Pesa
+ * callback verifies with Safaricom rather than trusting the client.
+ */
+exports.confirmCardPayment = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const payment = await Payment.findByPk(req.params.paymentId, { transaction: t });
+
+    if (!payment) {
+      await t.rollback();
+      return res.status(404).json({ success: false, message: 'Payment session not found.' });
+    }
+    if (!payment.cart_data || payment.cart_data.consumer_id !== req.user.id) {
+      await t.rollback();
+      return res.status(403).json({ success: false, message: 'Access denied.' });
+    }
+    if (payment.status !== 'pending') {
+      await t.rollback();
+      return res.status(409).json({ success: false, message: `Payment already ${payment.status}.` });
+    }
+
+    let intent;
+    try {
+      intent = await stripeService.retrievePaymentIntent(payment.checkout_request_id);
+    } catch (stripeError) {
+      await t.rollback();
+      console.error('[ORDER] Stripe retrieve failed:', stripeError.message);
+      return res.status(503).json({ success: false, message: 'Could not verify payment with Stripe. Please try again.' });
+    }
+
+    if (intent.status !== 'succeeded') {
+      await payment.update({ status: 'failed' }, { transaction: t });
+      await t.commit();
+      return res.status(400).json({ success: false, message: `Card payment ${intent.status.replace(/_/g, ' ')}. Please try again.` });
+    }
+
+    const order = await exports.createOrderFromPayment(payment, t);
+
+    await payment.update(
+      {
+        status:       'confirmed',
+        order_id:     order.id,
+        confirmed_at: new Date(),
+        cart_data:    null,
+      },
+      { transaction: t }
+    );
+
+    await t.commit();
+
+    res.status(201).json({ success: true, message: 'Payment confirmed. Order created.', order_id: order.id, order });
+  } catch (error) {
+    await t.rollback();
+    console.error('[ORDER] confirmCardPayment error:', error);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };

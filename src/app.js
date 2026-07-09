@@ -37,6 +37,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // ─── Route Mounts ────────────────────────────────────────────────────────────
+app.use('/checkout',     require('./routes/checkout.routes'));
 app.use('/api/auth',     require('./routes/auth.routes'));
 app.use('/api/vendors',  require('./routes/vendor.routes'));
 app.use('/api/menu',     require('./routes/menu.routes'));

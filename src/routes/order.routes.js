@@ -9,6 +9,7 @@ const router = express.Router();
 // ── Consumer ──────────────────────────────────────────────────────────────────
 router.post('/initiate',                       protect, restrictTo('consumer'),        orderController.initiateCheckout);
 router.post('/dev-confirm/:checkoutRequestId', protect, restrictTo('consumer'),        orderController.devConfirmPayment);
+router.post('/confirm-card-payment/:paymentId', protect, restrictTo('consumer'),       orderController.confirmCardPayment);
 router.get( '/',                               protect, restrictTo('consumer'),        orderController.getMyOrders);
 router.patch('/:id/report-issue',              protect, restrictTo('consumer'),        orderController.reportIssue);
 
