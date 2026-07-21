@@ -295,7 +295,7 @@ exports.initiateCheckout = async (req, res) => {
       console.error('[ORDER] STK Push failed:', mpesaError.message);
       return res.status(503).json({
         success: false,
-        message: 'M-Pesa service is currently unavailable. Please try again shortly.',
+        message: `M-Pesa request failed: ${mpesaError.message}`,
       });
     }
 
